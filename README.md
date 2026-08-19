@@ -124,12 +124,14 @@ use berylx::{run_with, Audit, DryRun, Real, Retry};
 
 run_with(&workflow, state, &Real);                     // do it
 run_with(&workflow, state, &DryRun::new());            // list the plan, touch nothing
-run_with(&workflow, state, &Retry::new(Real, 3));      // retry each task
+run_with(&workflow, state, &Retry::new(Real, 3));      // retry, backing off
 run_with(&workflow, state, &Audit::new(Real));         // record every task run
 ```
 
 `Retry` hands each attempt the state the previous one reached — the same
-property that makes compensation possible makes retry meaningful.
+property that makes compensation possible makes retry meaningful. It waits
+between attempts by default (exponential backoff with jitter, so simultaneous
+callers do not retry in lockstep); `Retry::without_backoff` retries immediately.
 
 Interpreters compose by wrapping: `Audit::new(Retry::new(Real, 3))`.
 
@@ -140,8 +142,9 @@ Interpreters compose by wrapping: `Audit::new(Retry::new(Real, 3))`.
 berylx = "0.1"
 ```
 
-**No dependencies.** Not "few" — zero, including for the concurrency, which uses
-`std::thread::scope`.
+**No dependencies.** Not "few" — zero, including for the concurrency
+(`std::thread::scope`) and for the retry jitter (`RandomState`, which reseeds
+per instance).
 
 ## What this is, and what it is not a port of
 

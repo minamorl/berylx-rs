@@ -21,7 +21,8 @@ for Rust rather than a transliteration of it.
 - `Root<S>` — the single owner of committed state, which advances only on
   success.
 - `Interpreter` with `Real`, `DryRun`, `Audit` and `Retry`, so aspects are added
-  by wrapping rather than by editing a workflow.
+  by wrapping rather than by editing a workflow. `Retry` backs off exponentially
+  with jitter by default; `Retry::without_backoff` retries immediately.
 - `to_dot` / `to_mermaid` — rendering a workflow without running it.
 - Zero dependencies, including for concurrency (`std::thread::scope`).
 

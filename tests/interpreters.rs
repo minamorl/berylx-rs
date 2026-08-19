@@ -6,8 +6,11 @@ mod common;
 
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
-use berylx::{branch, run, run_with, task, Audit, DryRun, Error, Node, Outcome, Real, Retry, Root};
+use berylx::{
+    branch, run, run_with, task, Audit, Backoff, DryRun, Error, Node, Outcome, Real, Retry, Root,
+};
 use common::Trail;
 
 fn step(name: &'static str) -> Node<Trail> {
@@ -83,7 +86,7 @@ fn retry_gives_a_flaky_task_another_go() {
         }
     });
 
-    let outcome = run_with(&flaky, Trail::default(), &Retry::new(Real, 3));
+    let outcome = run_with(&flaky, Trail::default(), &Retry::without_backoff(Real, 3));
 
     assert!(outcome.is_ok());
     assert_eq!(attempts.load(Ordering::SeqCst), 3);
@@ -100,7 +103,7 @@ fn retry_hands_each_attempt_the_state_the_last_one_reached() {
         }
     });
 
-    let outcome = run_with(&flaky, Trail::default(), &Retry::new(Real, 5));
+    let outcome = run_with(&flaky, Trail::default(), &Retry::without_backoff(Real, 5));
 
     assert!(outcome.is_ok());
     assert_eq!(outcome.state().as_slice(), ["try", "try", "try"]);
@@ -109,7 +112,7 @@ fn retry_hands_each_attempt_the_state_the_last_one_reached() {
 #[test]
 fn retry_gives_up_and_returns_the_last_failure() {
     let always: Node<Trail> = task("always", |t: Trail| Outcome::Err(t, Error::new("nope", "no")));
-    let outcome = run_with(&always, Trail::default(), &Retry::new(Real, 2));
+    let outcome = run_with(&always, Trail::default(), &Retry::without_backoff(Real, 2));
 
     assert_eq!(outcome.error().map(berylx::Error::code), Some("nope"));
 }
@@ -127,7 +130,7 @@ fn interpreters_compose_by_wrapping() {
         }
     });
 
-    let audit = Audit::new(Retry::new(Real, 3));
+    let audit = Audit::new(Retry::without_backoff(Real, 3));
     let outcome = run_with(&flaky, Trail::default(), &audit);
 
     assert!(outcome.is_ok());
@@ -219,4 +222,40 @@ fn branch_records_the_arm_it_took_in_the_error_route() {
     // inside it that actually failed.
     assert_eq!(error.failed_node(), Some("explode"));
     assert_eq!(error.trace(), ["risky", "explode"]);
+}
+
+#[test]
+fn retry_waits_between_attempts_by_default() {
+    // The default is exponential backoff with jitter, so a retry loop cannot
+    // hammer a struggling dependency. Three attempts means two waits, of at
+    // least base and 2*base, each scaled by a jitter factor of at least 0.5.
+    let always: Node<Trail> = task("always", |t: Trail| Outcome::Err(t, Error::new("nope", "no")));
+
+    let retry = Retry::new(Real, 3).with_base_delay(Duration::from_millis(40));
+    let started = Instant::now();
+    let outcome = run_with(&always, Trail::default(), &retry);
+    let elapsed = started.elapsed();
+
+    assert!(outcome.is_err());
+    // Minimum possible wait: 0.5*40 + 0.5*80 = 60ms.
+    assert!(
+        elapsed >= Duration::from_millis(60),
+        "expected the default Retry to back off, but it took only {elapsed:?}"
+    );
+}
+
+#[test]
+fn without_backoff_does_not_wait() {
+    let always: Node<Trail> = task("always", |t: Trail| Outcome::Err(t, Error::new("nope", "no")));
+
+    let started = Instant::now();
+    run_with(&always, Trail::default(), &Retry::without_backoff(Real, 5));
+    let elapsed = started.elapsed();
+
+    assert!(elapsed < Duration::from_millis(20), "immediate retry took {elapsed:?}");
+}
+
+#[test]
+fn the_default_backoff_is_exponential_jitter() {
+    assert_eq!(Backoff::default(), Backoff::ExponentialJitter);
 }

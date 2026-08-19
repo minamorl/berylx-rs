@@ -1,6 +1,9 @@
 //! Running a workflow, and wrapping how it runs.
 
+use std::collections::hash_map::RandomState;
+use std::hash::{BuildHasher, Hasher};
 use std::sync::Mutex;
+use std::time::Duration;
 
 use crate::error::Error;
 use crate::node::{Node, OnErr, Task};
@@ -91,30 +94,110 @@ impl<S, I: Interpreter<S>> Interpreter<S> for Audit<I> {
     }
 }
 
+/// How long to wait between retry attempts.
+///
+/// The default is exponential backoff with jitter, because a retry loop that
+/// hammers a struggling dependency with no pause is usually worse than not
+/// retrying at all. Jitter matters as much as the backoff: without it, every
+/// caller that failed at the same moment retries at the same moment.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Backoff {
+    /// Wait `base * 2^(attempt - 1)`, scaled by a random factor in `[0.5, 1.5)`.
+    #[default]
+    ExponentialJitter,
+    /// Retry immediately. Useful in tests, and for work with no shared
+    /// dependency to overwhelm.
+    None,
+}
+
 /// Retries a failing task, handing each attempt the state the last one reached.
+///
+/// ```
+/// use berylx::{run_with, task, Error, Outcome, Real, Retry};
+///
+/// // `without_backoff` retries immediately; `new` waits between attempts.
+/// let flaky = task("flaky", |n: u32| {
+///     if n < 2 { Outcome::Err(n + 1, Error::new("flaky", "not yet")) } else { Outcome::Ok(n) }
+/// });
+///
+/// assert_eq!(run_with(&flaky, 0, &Retry::without_backoff(Real, 3)).ok(), Some(2));
+/// ```
 #[derive(Clone, Copy, Debug)]
 pub struct Retry<I> {
     inner: I,
     attempts: u32,
+    backoff: Backoff,
+    base_delay: Duration,
 }
 
 impl<I> Retry<I> {
-    /// Wraps `inner` so each task is tried up to `attempts` times.
+    /// The default base delay before the first retry.
+    pub const DEFAULT_BASE_DELAY: Duration = Duration::from_millis(100);
+
+    /// Wraps `inner` so each task is tried up to `attempts` times, pausing
+    /// between attempts with exponential backoff and jitter.
     ///
     /// `attempts` counts the first try, so `1` retries nothing and `0` is
     /// treated as `1`.
     pub fn new(inner: I, attempts: u32) -> Self {
-        Self { inner, attempts: attempts.max(1) }
+        Self {
+            inner,
+            attempts: attempts.max(1),
+            backoff: Backoff::ExponentialJitter,
+            base_delay: Self::DEFAULT_BASE_DELAY,
+        }
     }
+
+    /// Wraps `inner` and retries immediately, without pausing.
+    pub fn without_backoff(inner: I, attempts: u32) -> Self {
+        Self { backoff: Backoff::None, ..Self::new(inner, attempts) }
+    }
+
+    /// Sets the delay before the first retry. Later retries double it.
+    #[must_use]
+    pub fn with_base_delay(mut self, base_delay: Duration) -> Self {
+        self.base_delay = base_delay;
+        self
+    }
+
+    /// How long to wait before the retry numbered `attempt` (1 is the first retry).
+    fn delay_before(&self, attempt: u32) -> Duration {
+        match self.backoff {
+            Backoff::None => Duration::ZERO,
+            Backoff::ExponentialJitter => {
+                let factor = 1_u32.checked_shl(attempt - 1).unwrap_or(u32::MAX);
+                let stepped = self.base_delay.saturating_mul(factor);
+                stepped.mul_f64(jitter())
+            }
+        }
+    }
+}
+
+/// A random factor in `[0.5, 1.5)`, without pulling in a random-number crate.
+///
+/// `RandomState` reseeds per instance — that is the whole reason it exists, so
+/// that `HashMap` iteration order cannot be predicted — which is enough entropy
+/// to keep simultaneous callers from retrying in lockstep.
+fn jitter() -> f64 {
+    let mut hasher = RandomState::new().build_hasher();
+    hasher.write_u8(0);
+    let bits = f64::from(u32::try_from(hasher.finish() % 1_000_000).unwrap_or(0));
+    0.5 + bits / 1_000_000.0
 }
 
 impl<S, I: Interpreter<S>> Interpreter<S> for Retry<I> {
     fn run_task(&self, task: &Task<S>, state: S) -> Outcome<S> {
         let mut outcome = self.inner.run_task(task, state);
-        for _ in 1..self.attempts {
+        for attempt in 1..self.attempts {
             match outcome {
                 ok @ Outcome::Ok(_) => return ok,
-                Outcome::Err(reached, _) => outcome = self.inner.run_task(task, reached),
+                Outcome::Err(reached, _) => {
+                    let delay = self.delay_before(attempt);
+                    if !delay.is_zero() {
+                        std::thread::sleep(delay);
+                    }
+                    outcome = self.inner.run_task(task, reached);
+                }
             }
         }
         outcome

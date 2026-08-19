@@ -110,7 +110,7 @@ mod root;
 
 pub use crate::error::Error;
 pub use crate::graph::{to_dot, to_mermaid};
-pub use crate::interp::{run, run_with, Audit, DryRun, Interpreter, Real, Retry};
+pub use crate::interp::{run, run_with, Audit, Backoff, DryRun, Interpreter, Real, Retry};
 pub use crate::node::{branch, task, Arm, Branch, Merge, Node, OnErr, Task};
 pub use crate::outcome::Outcome;
 pub use crate::root::Root;
@@ -118,7 +118,7 @@ pub use crate::root::Root;
 /// Everything you normally want in scope to write a workflow.
 pub mod prelude {
     pub use crate::error::Error;
-    pub use crate::interp::{run, run_with, DryRun, Interpreter, Real, Retry};
+    pub use crate::interp::{run, run_with, Backoff, DryRun, Interpreter, Real, Retry};
     pub use crate::node::{branch, task, Merge, Node, OnErr};
     pub use crate::outcome::Outcome;
     pub use crate::root::Root;
