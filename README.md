@@ -68,7 +68,7 @@ let workflow = task("reserve", reserve)
 
 - **One `Root`** owns committed state for an application boundary. It advances
   only when a run succeeds.
-- **Named tasks** are the unit of composition, so failures can say *where* they
+- **Named tasks** are the unit of composition, so failures can say _where_ they
   happened. `Error` carries a machine-readable code, the failing node, the route
   taken to reach it, sibling failures, and free-form metadata.
 - **The composed workflow is a value.** `Node<S>` is a tree you can inspect,
@@ -85,7 +85,7 @@ Rust's [API guidelines][overload] ask that an overloaded operator
 > bears some resemblance to \[the original\] **and shares the expected
 > properties, e.g. associativity**
 
-Berylx's parallel composition is *not* commutative — branches fold in written
+Berylx's parallel composition is _not_ commutative — branches fold in written
 order, so swapping them swaps the result. Spelling it `&` would be a promise the
 crate cannot keep. So: `.then()`, `.par()`, `.rescue_with()`.
 
@@ -104,10 +104,10 @@ let workflow = slow_failure("first").par(instant_failure("second"));
 Two failure modes are available, chosen on the node itself rather than by the
 interpreter:
 
-| mode | behaviour |
-| --- | --- |
-| `ShortCircuit` (default) | report the first failure in written order |
-| `.accumulate()` | run every branch, gather all failures into `Error::parallel_errors`, and keep the state every branch reached |
+| mode                     | behaviour                                                                                                    |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------ |
+| `ShortCircuit` (default) | report the first failure in written order                                                                    |
+| `.accumulate()`          | run every branch, gather all failures into `Error::parallel_errors`, and keep the state every branch reached |
 
 Because merging two states of your own type has no safe default — anything
 automatic silently drops one branch's work — you say what it means, either by
@@ -115,7 +115,7 @@ implementing `Merge` or by passing a closure to `.par_with()`.
 
 ## Retry, dry-run and audit are wrapped on, not written in
 
-The workflow tree says *what* the work is. An `Interpreter` says what running a
+The workflow tree says _what_ the work is. An `Interpreter` says what running a
 task means. They are separate, so aspects are added without touching the
 workflow:
 
@@ -151,7 +151,7 @@ over:
 
 - **`Lay` / `Focus`** — the Ruby version navigates a frozen hash by path,
   because Ruby has no immutable partial update. Rust has struct update syntax
-  (`S { charged: true, ..s }`), so your own type *is* the state. You keep
+  (`S { charged: true, ..s }`), so your own type _is_ the state. You keep
   compile-time field checking, and connections, handles and `Decimal` can live
   in state — none of which survive a `serde_json::Value`.
 - **The three-way `strict` merge** — it detects conflicting concurrent writes by
