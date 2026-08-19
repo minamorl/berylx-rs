@@ -69,3 +69,49 @@ fn tasks_are_listed_in_written_order() {
     let names: Vec<&str> = workflow.tasks().iter().map(|t| t.name()).collect();
     assert_eq!(names, ["charge", "reserve", "invoice", "gift", "plain"]);
 }
+
+#[test]
+fn the_same_task_used_twice_is_two_vertices() {
+    // Reusing a task is legitimate — those are two steps in the workflow, and
+    // a graph that collapses them into one vertex is lying about the shape.
+    let notify = step("notify");
+    let workflow = notify.clone().then(step("middle")).then(notify);
+
+    let dot = to_dot(&workflow);
+    assert_eq!(
+        dot.matches("label=\"notify\"").count(),
+        2,
+        "DOT collapsed the repeated task:\n{dot}"
+    );
+
+    let mermaid = to_mermaid(&workflow);
+    assert_eq!(
+        mermaid.matches("\"notify\"").count(),
+        2,
+        "Mermaid collapsed the repeated task:\n{mermaid}"
+    );
+}
+
+#[test]
+fn both_dialects_identify_vertices_per_occurrence() {
+    let workflow = step("a").then(step("b"));
+
+    let dot = to_dot(&workflow);
+    let mermaid = to_mermaid(&workflow);
+
+    // Same identifier scheme in both dialects: sequential, never name-derived.
+    assert!(dot.contains("n1 -> n2"), "{dot}");
+    assert!(mermaid.contains("n1 --> n2"), "{mermaid}");
+}
+
+#[test]
+fn a_quote_in_a_task_name_does_not_break_the_output() {
+    let odd: Node<Trail> = task("say \"hi\"", |t: Trail| Outcome::Ok(t));
+    let workflow = step("before").then(odd);
+
+    let dot = to_dot(&workflow);
+    let mermaid = to_mermaid(&workflow);
+
+    assert!(dot.contains(r#"label="say \"hi\"""#), "unescaped quote in DOT:\n{dot}");
+    assert!(mermaid.contains(r#""say \"hi\"""#), "unescaped quote in Mermaid:\n{mermaid}");
+}

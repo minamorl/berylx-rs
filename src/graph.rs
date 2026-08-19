@@ -10,7 +10,9 @@ use crate::node::Node;
 /// use berylx::{task, to_dot, Outcome};
 ///
 /// let workflow = task("a", Outcome::Ok).then(task("b", Outcome::<i32>::Ok));
-/// assert!(to_dot(&workflow).contains("\"a\" -> \"b\""));
+/// let dot = to_dot(&workflow);
+/// assert!(dot.contains("n1 [label=\"a\""));
+/// assert!(dot.contains("n1 -> n2"));
 /// ```
 #[must_use]
 pub fn to_dot<S>(node: &Node<S>) -> String {
@@ -67,28 +69,31 @@ impl Builder {
     }
 
     fn vertex(&mut self, label: &str, shape: Shape) -> Vertex {
+        // Identifiers are per *occurrence*, never derived from the name. A
+        // workflow may legitimately use the same task twice, and those are two
+        // steps in the graph, not one. Naming the vertex after the task would
+        // silently collapse them — and would break outright on a name
+        // containing a quote.
         self.next += 1;
         let id = format!("n{}", self.next);
-        match self.dialect {
+        let escaped = escape(label);
+        let line = match self.dialect {
             Dialect::Dot => {
                 let attrs = match shape {
                     Shape::Task => "shape=box",
                     Shape::Control => "shape=diamond",
                     Shape::Recovery => "shape=box, style=dashed",
                 };
-                self.lines.push(format!("\"{label}\" [{attrs}];"));
-                Vertex { id: format!("\"{label}\""), label: label.to_owned() }
+                format!("{id} [label=\"{escaped}\", {attrs}];")
             }
-            Dialect::Mermaid => {
-                let body = match shape {
-                    Shape::Task => format!("{id}[\"{label}\"]"),
-                    Shape::Control => format!("{id}{{\"{label}\"}}"),
-                    Shape::Recovery => format!("{id}(\"{label}\")"),
-                };
-                self.lines.push(body);
-                Vertex { id, label: label.to_owned() }
-            }
-        }
+            Dialect::Mermaid => match shape {
+                Shape::Task => format!("{id}[\"{escaped}\"]"),
+                Shape::Control => format!("{id}{{\"{escaped}\"}}"),
+                Shape::Recovery => format!("{id}(\"{escaped}\")"),
+            },
+        };
+        self.lines.push(line);
+        Vertex { id, label: label.to_owned() }
     }
 
     fn edge(&mut self, from: &Vertex, to: &Vertex, label: Option<&str>) {
@@ -168,6 +173,12 @@ impl Vertex {
     fn clone_of(&self) -> Vertex {
         Vertex { id: self.id.clone(), label: self.label.clone() }
     }
+}
+
+/// Escapes the characters that would otherwise terminate a quoted label in
+/// either dialect.
+fn escape(label: &str) -> String {
+    label.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 #[derive(Clone, Copy)]
