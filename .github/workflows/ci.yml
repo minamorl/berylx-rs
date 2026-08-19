@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  test:
+    name: test (${{ matrix.rust }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The lowest entry is the MSRV declared in Cargo.toml. If this job goes
+        # red, either the code or `rust-version` is wrong — do not just bump one.
+        rust: ["1.70.0", stable, beta]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.rust }}
+      - run: cargo test --all-targets
+      - run: cargo test --doc
+      - run: cargo run --example checkout
+
+  lint:
+    name: fmt + clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings -W clippy::pedantic
+
+  docs:
+    name: docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # `missing_docs` is denied in Cargo.toml, and this catches broken intra-doc
+      # links on top of it — docs.rs would fail on them after publish otherwise.
+      - run: cargo doc --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings

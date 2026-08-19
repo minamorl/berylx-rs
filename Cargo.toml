@@ -1,0 +1,15 @@
+[package]
+name = "berylx"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.70"
+authors = ["minamorl"]
+description = "Workflows whose failures carry the state they reached."
+license = "MIT"
+repository = "https://github.com/minamorl/berylx-rs"
+documentation = "https://docs.rs/berylx"
+keywords = ["workflow", "saga", "compensation", "state-machine", "pipeline"]
+categories = ["asynchronous", "data-structures", "rust-patterns"]
+readme = "README.md"
+
+[dependencies]
