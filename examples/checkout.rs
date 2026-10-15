@@ -8,7 +8,7 @@
 // would obscure the example rather than improve it.
 #![allow(clippy::struct_excessive_bools)]
 
-use berylx::{branch, task, to_mermaid, Error, Merge, Node, Outcome, Root};
+use berylx::{branch, task, to_mermaid, Conflict, Error, Merge, Node, Outcome, Root};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct Checkout {
@@ -23,15 +23,15 @@ struct Checkout {
 impl Merge for Checkout {
     /// The two parallel branches touch disjoint fields, so combining them is
     /// taking whichever side actually did something.
-    fn merge(left: Self, right: Self) -> Self {
-        Checkout {
+    fn merge(_base: &Self, left: Self, right: Self) -> Result<Self, Conflict> {
+        Ok(Checkout {
             charged_cents: left.charged_cents.max(right.charged_cents),
             refunded_cents: left.refunded_cents.max(right.refunded_cents),
             reserved: left.reserved || right.reserved,
             invoiced: left.invoiced || right.invoiced,
             shipped: left.shipped || right.shipped,
             notified: left.notified || right.notified,
-        }
+        })
     }
 }
 

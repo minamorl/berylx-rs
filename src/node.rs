@@ -4,12 +4,13 @@ use std::fmt;
 use std::sync::Arc;
 
 use crate::error::Error;
+use crate::merge::Conflict;
 use crate::outcome::Outcome;
 
 type Run<S> = Arc<dyn Fn(S) -> Outcome<S> + Send + Sync>;
 type Predicate<S> = Arc<dyn Fn(&S) -> bool + Send + Sync>;
 type Recover<S> = Arc<dyn Fn(S, Error) -> Outcome<S> + Send + Sync>;
-type Merger<S> = Arc<dyn Fn(S, S) -> S + Send + Sync>;
+type Merger<S> = Arc<dyn Fn(&S, S, S) -> Result<S, Conflict> + Send + Sync>;
 
 /// How a parallel node reacts when one of its branches fails.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -31,14 +32,30 @@ pub enum OnErr {
 /// is no such default that does not silently drop one branch's work, so the
 /// choice is yours to state.
 ///
-/// Implement this to use [`Node::par`], or pass a closure to
+/// The join sees the state every branch started from as well as the two
+/// results. Without that base, a branch that did nothing and a branch that put
+/// a field back to its old value look the same, and an independent update to
+/// an existing field is silently lost. When both sides changed the same thing
+/// in ways that cannot both stand, return a [`Conflict`] rather than picking
+/// one: the parallel node then fails with the code `"merge_conflict"` and the
+/// base state.
+///
+/// Implement this to use [`Node::par`], or pass a closure (or one of
+/// [`keep_left`](crate::keep_left) and [`keep_right`](crate::keep_right)) to
 /// [`Node::par_with`] and skip the trait.
 pub trait Merge: Sized {
-    /// Combines the state from an earlier branch with a later one.
+    /// Combines the state from an earlier branch with a later one, both of
+    /// which started from `base`.
     ///
-    /// Berylx applies this in the order the branches were written, never in
-    /// the order they happened to finish.
-    fn merge(left: Self, right: Self) -> Self;
+    /// Berylx applies this as a left fold in the order the branches were
+    /// written, never in the order they happened to finish, and passes the
+    /// same `base` to every call.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`Conflict`] when `left` and `right` changed the state in
+    /// ways that cannot both be kept.
+    fn merge(base: &Self, left: Self, right: Self) -> Result<Self, Conflict>;
 }
 
 /// A named unit of work: one state in, one outcome out.
@@ -200,7 +217,7 @@ impl<S> Node<S> {
     pub fn par_with(
         self,
         other: Node<S>,
-        merge: impl Fn(S, S) -> S + Send + Sync + 'static,
+        merge: impl Fn(&S, S, S) -> Result<S, Conflict> + Send + Sync + 'static,
     ) -> Node<S> {
         self.par_inner(other, Arc::new(merge))
     }

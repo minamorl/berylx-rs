@@ -4,7 +4,7 @@
 //! dead to the others.
 #![allow(dead_code)]
 
-use berylx::Merge;
+use berylx::{Conflict, Merge};
 
 /// A state that remembers the order things happened to it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -21,8 +21,8 @@ impl Trail {
 }
 
 impl Merge for Trail {
-    fn merge(mut left: Self, right: Self) -> Self {
+    fn merge(_base: &Self, mut left: Self, right: Self) -> Result<Self, Conflict> {
         left.0.extend(right.0);
-        left
+        Ok(left)
     }
 }

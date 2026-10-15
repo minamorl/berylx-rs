@@ -5,15 +5,15 @@
 //! importantly — pin the one property that deliberately does *not* hold, so
 //! that its absence is a decision rather than a surprise.
 
-use berylx::{run, task, Error, Merge, Node, Outcome};
+use berylx::{run, task, Conflict, Error, Merge, Node, Outcome};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct Trail(Vec<&'static str>);
 
 impl Merge for Trail {
-    fn merge(mut left: Self, right: Self) -> Self {
+    fn merge(_base: &Self, mut left: Self, right: Self) -> Result<Self, Conflict> {
         left.0.extend(right.0);
-        left
+        Ok(left)
     }
 }
 

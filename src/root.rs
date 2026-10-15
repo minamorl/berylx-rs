@@ -48,6 +48,15 @@ impl<S> Root<S> {
 
 impl<S: Clone + Send> Root<S> {
     /// Runs a workflow, committing only if it succeeded.
+    ///
+    /// The commit happens once per run, after the whole workflow has
+    /// succeeded, never task by task. A failed run leaves the committed state
+    /// as it was, but neither a commit nor a failure undoes what the tasks did
+    /// outside the state: berylx composes work within one process, and
+    /// compensating an external side effect is the job of a
+    /// [`Node::rescue_with`] handler.
+    ///
+    /// To run a workflow without committing anywhere, use [`run`](crate::run).
     pub fn run(&mut self, node: &Node<S>) -> Outcome<S> {
         self.run_with(node, &Real)
     }
