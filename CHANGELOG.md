@@ -4,6 +4,31 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `DryRun::plan(&workflow, state)` dry-runs one workflow and returns the plan of
+  that run alone, so nothing an earlier run reached carries over.
+- `Conflict`, which a merge returns when two parallel branches changed the
+  state in ways that cannot both stand.
+- `keep_left` and `keep_right`, reducers that work for any state type. Neither
+  is a default; pass one to `Node::par_with` to choose it.
+
+### Changed
+
+- **Breaking:** merging parallel branches is now a three-way join that can
+  fail. `Merge::merge` is `fn merge(base: &Self, left: Self, right: Self) ->
+  Result<Self, Conflict>`, and the closure given to `Node::par_with` has the
+  same shape. Every call receives the state all branches started from, still
+  as a binary left fold in the order the branches were written.
+- A merge conflict fails the parallel node with the code `"merge_conflict"`,
+  carrying the state all branches started from. Under `OnErr::Accumulate` the
+  branch failures are still attached as `parallel_errors`.
+- `Root::run` documents that it commits once per run, after the whole workflow
+  has succeeded, and that neither a commit nor a failure undoes side effects
+  outside the state.
+
 ## [0.1.0] - 2026-08-20
 
 First release. A redesign of the [Ruby berylx gem](https://github.com/minamorl/berylx)

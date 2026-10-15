@@ -67,14 +67,16 @@
 //! be a promise the crate cannot keep.
 //!
 //! ```
-//! use berylx::{branch, run, task, Merge, Outcome};
+//! use berylx::{branch, run, task, Conflict, Merge, Outcome};
 //!
 //! #[derive(Clone, Debug, PartialEq)]
 //! struct Counts { a: u32, b: u32 }
 //!
 //! impl Merge for Counts {
-//!     fn merge(left: Self, right: Self) -> Self {
-//!         Counts { a: left.a + right.a, b: left.b + right.b }
+//!     // Both branches started from `base`, so each side's work is its
+//!     // difference from it.
+//!     fn merge(base: &Self, left: Self, right: Self) -> Result<Self, Conflict> {
+//!         Ok(Counts { a: left.a + right.a - base.a, b: left.b + right.b - base.b })
 //!     }
 //! }
 //!
@@ -104,6 +106,7 @@
 mod error;
 mod graph;
 mod interp;
+mod merge;
 mod node;
 mod outcome;
 mod root;
@@ -111,6 +114,7 @@ mod root;
 pub use crate::error::Error;
 pub use crate::graph::{to_dot, to_mermaid};
 pub use crate::interp::{run, run_with, Audit, Backoff, DryRun, Interpreter, Real, Retry};
+pub use crate::merge::{keep_left, keep_right, Conflict};
 pub use crate::node::{branch, task, Arm, Branch, Merge, Node, OnErr, Task};
 pub use crate::outcome::Outcome;
 pub use crate::root::Root;
@@ -119,6 +123,7 @@ pub use crate::root::Root;
 pub mod prelude {
     pub use crate::error::Error;
     pub use crate::interp::{run, run_with, Backoff, DryRun, Interpreter, Real, Retry};
+    pub use crate::merge::{keep_left, keep_right, Conflict};
     pub use crate::node::{branch, task, Merge, Node, OnErr};
     pub use crate::outcome::Outcome;
     pub use crate::root::Root;

@@ -6,8 +6,12 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use crate::error::Error;
+use crate::merge::Conflict;
 use crate::node::{Node, OnErr, Task};
 use crate::outcome::Outcome;
+
+/// How a parallel node joins two branch states, given the state both started from.
+type Join<S> = dyn Fn(&S, S, S) -> Result<S, Conflict> + Send + Sync;
 
 /// Decides what actually happens when the walk reaches a task.
 ///
@@ -53,6 +57,32 @@ impl DryRun {
     #[must_use]
     pub fn planned(&self) -> Vec<String> {
         self.planned.lock().expect("dry-run plan poisoned").clone()
+    }
+
+    /// Dry-runs `node` from `state` and returns the plan of that run alone.
+    ///
+    /// Every call records into a fresh plan, so nothing an earlier run reached
+    /// carries over into this one. No task body runs, so branch predicates
+    /// see `state` exactly as supplied, and no failure is simulated that a
+    /// [`Node::rescue_with`] handler could catch.
+    ///
+    /// ```
+    /// use berylx::{branch, task, DryRun, Outcome};
+    ///
+    /// let workflow = task("charge", |n: i32| Outcome::Ok(n + 1)).then(
+    ///     branch()
+    ///         .when("paid", |n: &i32| *n > 0, task("ship", |n: i32| Outcome::Ok(n)))
+    ///         .otherwise(task("refund", |n: i32| Outcome::Ok(n))),
+    /// );
+    ///
+    /// assert_eq!(DryRun::plan(&workflow, 1), vec!["charge", "ship"]);
+    /// assert_eq!(DryRun::plan(&workflow, 0), vec!["charge", "refund"]);
+    /// ```
+    #[must_use]
+    pub fn plan<S: Clone + Send>(node: &Node<S>, state: S) -> Vec<String> {
+        let recorder = Self::new();
+        let _ = run_with(node, state, &recorder);
+        recorder.planned.into_inner().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
 
@@ -280,7 +310,7 @@ where
 fn run_par<S, I>(
     branches: &[Node<S>],
     state: S,
-    merge: &(dyn Fn(S, S) -> S + Send + Sync),
+    merge: &Join<S>,
     on_err: OnErr,
     interp: &I,
 ) -> Outcome<S>
@@ -305,22 +335,28 @@ where
         handles.into_iter().map(|handle| handle.join().expect("branch panicked")).collect()
     });
 
+    // Every branch started from `state`, so it is the base each join sees and
+    // the state a conflict hands back.
     match on_err {
-        OnErr::ShortCircuit => fold_short_circuit(outcomes, merge),
-        OnErr::Accumulate => fold_accumulate(outcomes, merge),
+        OnErr::ShortCircuit => fold_short_circuit(outcomes, state, merge),
+        OnErr::Accumulate => fold_accumulate(outcomes, state, merge),
     }
 }
 
-fn fold_short_circuit<S>(
-    outcomes: Vec<Outcome<S>>,
-    merge: &(dyn Fn(S, S) -> S + Send + Sync),
-) -> Outcome<S> {
+fn conflict_error(conflict: &Conflict) -> Error {
+    Error::new("merge_conflict", conflict.message())
+}
+
+fn fold_short_circuit<S>(outcomes: Vec<Outcome<S>>, base: S, merge: &Join<S>) -> Outcome<S> {
     let mut merged: Option<S> = None;
     for outcome in outcomes {
         match outcome {
             Outcome::Ok(state) => {
                 merged = Some(match merged {
-                    Some(left) => merge(left, state),
+                    Some(left) => match merge(&base, left, state) {
+                        Ok(joined) => joined,
+                        Err(conflict) => return Outcome::Err(base, conflict_error(&conflict)),
+                    },
                     None => state,
                 });
             }
@@ -332,11 +368,9 @@ fn fold_short_circuit<S>(
     Outcome::Ok(merged.expect("parallel node had no branches"))
 }
 
-fn fold_accumulate<S>(
-    outcomes: Vec<Outcome<S>>,
-    merge: &(dyn Fn(S, S) -> S + Send + Sync),
-) -> Outcome<S> {
+fn fold_accumulate<S>(outcomes: Vec<Outcome<S>>, base: S, merge: &Join<S>) -> Outcome<S> {
     let mut merged: Option<S> = None;
+    let mut conflict = None;
     let mut errors = Vec::new();
 
     // Every branch contributes its state, including the ones that failed. That
@@ -346,13 +380,27 @@ fn fold_accumulate<S>(
             Outcome::Ok(state) => (state, None),
             Outcome::Err(state, error) => (state, Some(error)),
         };
-        merged = Some(match merged {
-            Some(left) => merge(left, state),
-            None => state,
-        });
+        if conflict.is_none() {
+            merged = match merged {
+                Some(left) => match merge(&base, left, state) {
+                    Ok(joined) => Some(joined),
+                    Err(found) => {
+                        conflict = Some(found);
+                        None
+                    }
+                },
+                None => Some(state),
+            };
+        }
         if let Some(error) = error {
             errors.push(error);
         }
+    }
+
+    // A conflict leaves no joined state to report, so the failure carries the
+    // base. The branch failures still travel with it.
+    if let Some(conflict) = conflict {
+        return Outcome::Err(base, conflict_error(&conflict).with_parallel_errors(errors));
     }
 
     let state = merged.expect("parallel node had no branches");
