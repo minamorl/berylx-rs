@@ -53,7 +53,7 @@ fn unlimited_starts_all_and_matches_bounded() {
         workers::run(branches, None),
         workers::run((0..4).map(|i| move || i).collect(), NonZeroUsize::new(2))
     );
-    assert!(workers::run(Vec::<fn() -> usize>::new(), None).is_empty());
+    assert_eq!(workers::run(Vec::<fn() -> usize>::new(), None), [] as [usize; 0]);
 }
 
 #[test]
