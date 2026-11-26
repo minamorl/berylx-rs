@@ -2,6 +2,7 @@
 
 use std::collections::hash_map::RandomState;
 use std::hash::{BuildHasher, Hasher};
+use std::num::NonZeroUsize;
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -240,8 +241,8 @@ where
     match node {
         Node::Task(task) => interp.run_task(task, state),
         Node::Seq(steps) => run_seq(steps, state, interp),
-        Node::Par { branches, merge, on_err } => {
-            run_par(branches, state, merge.as_ref(), *on_err, interp)
+        Node::Par { branches, merge, on_err, workers } => {
+            run_par(branches, state, merge.as_ref(), *on_err, *workers, interp)
         }
         Node::Branch { arms, otherwise } => {
             for arm in arms {
@@ -282,6 +283,7 @@ fn run_par<S, I>(
     state: S,
     merge: &(dyn Fn(S, S) -> S + Send + Sync),
     on_err: OnErr,
+    workers: Option<NonZeroUsize>,
     interp: &I,
 ) -> Outcome<S>
 where
@@ -292,18 +294,19 @@ where
         return Outcome::Ok(state);
     }
 
-    // Branches run at the same time, but their results are folded in the order
-    // they were written. Wall-clock order must not reach the state.
-    let outcomes: Vec<Outcome<S>> = std::thread::scope(|scope| {
-        let handles: Vec<_> = branches
-            .iter()
-            .map(|branch| {
-                let start = state.clone();
-                scope.spawn(move || run_with(branch, start, interp))
-            })
-            .collect();
-        handles.into_iter().map(|handle| handle.join().expect("branch panicked")).collect()
-    });
+    // Branches run concurrently (up to `workers`, or all at once when omitted),
+    // and their results are folded in the order they were written. Wall-clock
+    // order must not reach the state.
+    let jobs: Vec<_> = branches
+        .iter()
+        .map(|branch| {
+            let start = state.clone();
+            move || run_with(branch, start, interp)
+        })
+        .collect();
+    drop(state);
+
+    let outcomes = crate::workers::run(jobs, workers);
 
     match on_err {
         OnErr::ShortCircuit => fold_short_circuit(outcomes, merge),

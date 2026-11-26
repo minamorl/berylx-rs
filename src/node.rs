@@ -1,6 +1,7 @@
 //! The workflow itself: named tasks and the combinators that join them.
 
 use std::fmt;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use crate::error::Error;
@@ -133,6 +134,9 @@ pub enum Node<S> {
         merge: Merger<S>,
         /// What to do when a branch fails.
         on_err: OnErr,
+        /// Maximum number of branches that may run concurrently, or `None` for
+        /// all branches at once.
+        workers: Option<NonZeroUsize>,
     },
     /// The first arm whose predicate holds, or `otherwise`.
     Branch {
@@ -157,10 +161,11 @@ impl<S> fmt::Debug for Node<S> {
         match self {
             Node::Task(task) => f.debug_tuple("Task").field(task).finish(),
             Node::Seq(steps) => f.debug_tuple("Seq").field(steps).finish(),
-            Node::Par { branches, on_err, .. } => f
+            Node::Par { branches, on_err, workers, .. } => f
                 .debug_struct("Par")
                 .field("branches", branches)
                 .field("on_err", on_err)
+                .field("workers", workers)
                 .finish_non_exhaustive(),
             Node::Branch { arms, otherwise } => {
                 f.debug_struct("Branch").field("arms", arms).field("otherwise", otherwise).finish()
@@ -194,8 +199,11 @@ impl<S> Node<S> {
 
     /// Runs `other` alongside `self`, merging with `merge`.
     ///
-    /// Parallel nodes flatten the same way sequences do, so `a.par_with(b, m)`
-    /// followed by `.par_with(c, m)` is one three-branch node, not a nest.
+    /// Unlimited parallel nodes flatten the same way sequences do, so
+    /// `a.par_with(b, m)` followed by `.par_with(c, m)` is one three-branch
+    /// node, not a nest. A parallel node with a worker limit set via
+    /// [`Node::with_workers`] is preserved as a single branch so its limit
+    /// stays scoped to its own branches.
     #[must_use]
     pub fn par_with(
         self,
@@ -207,14 +215,14 @@ impl<S> Node<S> {
 
     fn par_inner(self, other: Node<S>, merge: Merger<S>) -> Node<S> {
         let (mut branches, on_err) = match self {
-            Node::Par { branches, on_err, .. } => (branches, on_err),
+            Node::Par { branches, on_err, workers: None, .. } => (branches, on_err),
             node => (vec![node], OnErr::default()),
         };
         match other {
-            Node::Par { branches: rest, .. } => branches.extend(rest),
+            Node::Par { branches: rest, workers: None, .. } => branches.extend(rest),
             node => branches.push(node),
         }
-        Node::Par { branches, merge, on_err }
+        Node::Par { branches, merge, on_err, workers: None }
     }
 
     /// Catches a failure from `self` and gives it a chance to recover.
@@ -234,8 +242,8 @@ impl<S> Node<S> {
     #[must_use]
     pub fn accumulate(self) -> Node<S> {
         match self {
-            Node::Par { branches, merge, .. } => {
-                Node::Par { branches, merge, on_err: OnErr::Accumulate }
+            Node::Par { branches, merge, workers, .. } => {
+                Node::Par { branches, merge, on_err: OnErr::Accumulate, workers }
             }
             node => node,
         }
@@ -245,8 +253,46 @@ impl<S> Node<S> {
     #[must_use]
     pub fn short_circuit(self) -> Node<S> {
         match self {
-            Node::Par { branches, merge, .. } => {
-                Node::Par { branches, merge, on_err: OnErr::ShortCircuit }
+            Node::Par { branches, merge, workers, .. } => {
+                Node::Par { branches, merge, on_err: OnErr::ShortCircuit, workers }
+            }
+            node => node,
+        }
+    }
+
+    /// Limits how many branches of a parallel node may run concurrently.
+    /// A no-op elsewhere.
+    ///
+    /// Without a limit, every branch starts together. Setting a limit only
+    /// bounds concurrency within this parallel node — every branch still runs
+    /// to completion from the same starting state and folds in written order.
+    ///
+    /// ```
+    /// use std::num::NonZeroUsize;
+    /// use berylx::{run, task, Merge, Outcome};
+    ///
+    /// #[derive(Clone, Debug, Default, PartialEq, Eq)]
+    /// struct Sum(u32);
+    ///
+    /// impl Merge for Sum {
+    ///     fn merge(left: Self, right: Self) -> Self {
+    ///         Sum(left.0 + right.0)
+    ///     }
+    /// }
+    ///
+    /// let add = |n| task("add", move |s: Sum| Outcome::Ok(Sum(s.0 + n)));
+    /// let workflow = add(1)
+    ///     .par(add(2))
+    ///     .par(add(3))
+    ///     .with_workers(NonZeroUsize::new(2).unwrap());
+    ///
+    /// assert_eq!(run(&workflow, Sum(0)).ok(), Some(Sum(6)));
+    /// ```
+    #[must_use]
+    pub fn with_workers(self, limit: NonZeroUsize) -> Node<S> {
+        match self {
+            Node::Par { branches, merge, on_err, .. } => {
+                Node::Par { branches, merge, on_err, workers: Some(limit) }
             }
             node => node,
         }
