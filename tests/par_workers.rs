@@ -428,7 +428,8 @@ fn parallel_workers_input_gives_every_branch_same_start_state() {
 fn parallel_workers_fold_uses_definition_order_not_completion_order() {
     // Force branch 1 to finish before branch 0 while both occupy the 2 worker slots.
     let (tx0, rx0) = mpsc::channel();
-    let rx0 = Arc::new(Mutex::new(rx0));
+    let tx0 = Mutex::new(tx0);
+    let rx0 = Mutex::new(rx0);
 
     let b0 = task("b0", move |mut t: Trail| {
         rx0.lock().unwrap().recv().unwrap();
@@ -437,7 +438,7 @@ fn parallel_workers_fold_uses_definition_order_not_completion_order() {
     });
     let b1 = task("b1", move |mut t: Trail| {
         t.push("b1");
-        tx0.send(()).unwrap();
+        tx0.lock().unwrap().send(()).unwrap();
         Outcome::Ok(t)
     });
 
@@ -452,7 +453,8 @@ fn parallel_workers_fold_uses_definition_order_not_completion_order() {
 fn parallel_workers_short_circuit_reports_first_error_in_definition_order() {
     // Branch 1 fails strictly before branch 0 starts failing; branch 0 still wins.
     let (tx, rx) = mpsc::channel();
-    let rx = Arc::new(Mutex::new(rx));
+    let tx = Mutex::new(tx);
+    let rx = Mutex::new(rx);
 
     let b0 = task("b0", move |mut t: Trail| {
         rx.lock().unwrap().recv().unwrap();
@@ -461,7 +463,7 @@ fn parallel_workers_short_circuit_reports_first_error_in_definition_order() {
     });
     let b1 = task("b1", move |mut t: Trail| {
         t.push("b1");
-        tx.send(()).unwrap();
+        tx.lock().unwrap().send(()).unwrap();
         Outcome::Err(t, Error::new("err1", "finished sooner"))
     });
 
@@ -480,7 +482,8 @@ fn parallel_workers_short_circuit_reports_first_error_in_definition_order() {
 fn parallel_workers_accumulate_reports_all_errors_in_definition_order() {
     // Force branch 1 to finish before branch 0; both fail, plus branch 3 fails in wave 2.
     let (tx, rx) = mpsc::channel();
-    let rx = Arc::new(Mutex::new(rx));
+    let tx = Mutex::new(tx);
+    let rx = Mutex::new(rx);
 
     let b0 = task("b0", move |mut t: Trail| {
         rx.lock().unwrap().recv().unwrap();
@@ -489,7 +492,7 @@ fn parallel_workers_accumulate_reports_all_errors_in_definition_order() {
     });
     let b1 = task("b1", move |mut t: Trail| {
         t.push("b1");
-        tx.send(()).unwrap();
+        tx.lock().unwrap().send(()).unwrap();
         Outcome::Err(t, Error::new("err1", "second"))
     });
 
@@ -724,12 +727,13 @@ fn parallel_workers_panic_stops_pending_branches_from_starting() {
 fn parallel_workers_panic_joins_all_started_branches_before_propagation() {
     let (started_tx, started_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel();
-    let started_rx = Arc::new(Mutex::new(started_rx));
-    let release_rx = Arc::new(Mutex::new(release_rx));
+    let started_tx = Mutex::new(started_tx);
+    let started_rx = Mutex::new(started_rx);
+    let release_rx = Mutex::new(release_rx);
     let b1_finished = Arc::new(AtomicBool::new(false));
     let b2_started = Arc::new(AtomicUsize::new(0));
     let (b0_exited_tx, b0_exited_rx) = mpsc::channel();
-    let b0_exited_tx = Arc::new(Mutex::new(Some(b0_exited_tx)));
+    let b0_exited_tx = Mutex::new(Some(b0_exited_tx));
 
     // Branch 0 waits until branch 1 has definitely started, then panics.
     let b0: Node<Trail> = task("b0", move |_: Trail| {
@@ -742,7 +746,7 @@ fn parallel_workers_panic_joins_all_started_branches_before_propagation() {
     // and marks finished before returning.
     let b1_done_flag = Arc::clone(&b1_finished);
     let b1: Node<Trail> = task("b1", move |mut t: Trail| {
-        started_tx.send(()).unwrap();
+        started_tx.lock().unwrap().send(()).unwrap();
         release_rx.lock().unwrap().recv().unwrap();
         b1_done_flag.store(true, Ordering::SeqCst);
         t.push("b1");
@@ -949,13 +953,13 @@ fn parallel_workers_integrates_with_root_and_interpreters() {
     let err_out = err_root.run(&failing);
     assert!(err_out.is_err());
     assert_eq!(err_out.state().as_slice(), ["bad"]);
-    assert!(err_root.state().0.is_empty());
+    assert_eq!(err_root.state().0, Vec::<String>::new());
 
     // DryRun records all branches without executing bodies.
     let plan = DryRun::new();
     let dry_out = run_with(&workflow, Trail::default(), &plan);
     assert!(dry_out.is_ok());
-    assert!(dry_out.state().0.is_empty());
+    assert_eq!(dry_out.state().0, Vec::<String>::new());
     let mut planned = plan.planned();
     planned.sort();
     assert_eq!(planned, ["a", "b", "c"]);
